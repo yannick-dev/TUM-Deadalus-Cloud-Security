@@ -1,0 +1,69 @@
+name: Deploy Terraform to AWS
+
+on:
+  workflow_dispatch:
+
+
+permissions:
+  id-token: write   # This is required for requesting the JWT
+  contents: read    # This is required for actions/checkout   
+
+jobs:
+
+  terraform-plan:
+    name: 'Terraform Plan'
+    runs-on: ubuntu-latest
+    
+    env:
+      TF_VAR_static_token: ${{ secrets.APP_TOKEN }} 
+      # students will have to generate their own token
+      # using a free online website
+      # or through ubuntu terminal with this command: openssl rand -hex 16
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+      
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region: eu-central-1
+
+    
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+      
+    
+    
+    - name: Get IAM Role Name
+      id: iam
+      run: |
+        ROLE_ARN=$(aws sts get-caller-identity --query Arn --output text)
+        # Arn example: arn:aws:sts::<account-id>:assumed-role/role-name/session-name
+        ROLE_NAME=$(echo $ROLE_ARN | cut -d'/' -f2)
+        echo "role_name=$ROLE_NAME" >> $GITHUB_OUTPUT
+
+        
+    - name: Terraform Init AWS
+      run: |
+        # Sanitize the actor's name to be used in the S3 key
+        # Replaces spaces and special characters with a hyphen
+        SANITIZED_ACTOR=$(echo "${{ github.actor }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g')
+        
+        terraform init \
+          -backend-config="key=ci-states/${{ steps.iam.outputs.role_name }}/terraform.tfstate" \
+          -input=false
+      
+    - name: Terraform Validate AWS
+      run: terraform validate
+      
+
+    - name: Teraform Plan AWS
+      run: terraform plan -var="iam_role_name=${{ steps.iam.outputs.role_name }}"
+
+    - name: Terraform Apply AWS
+      run: terraform apply -auto-approve -var="iam_role_name=${{ steps.iam.outputs.role_name }}"
+      
